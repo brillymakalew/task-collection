@@ -113,6 +113,12 @@ def main():
         st.session_state["is_admin"] = False
 
     st.title("📥 Pengumpulan Tugas Kelompok")
+    # Credit di bawah title
+    st.caption('Built by [Brilly Andro](https://brillyandro.com)')
+
+    # Credit juga di sidebar
+    st.sidebar.markdown("#### 👨‍💻 Info")
+    st.sidebar.markdown("by [Brilly Andro](https://brillyandro.com)")
 
     tab_submit, tab_admin = st.tabs(["🧑‍🎓 Pengumpulan Tugas", "🧑‍💼 Admin Panel"])
 
@@ -127,9 +133,13 @@ def main():
         with col1:
             class_name = st.text_input("Nama Kelas", placeholder="misal: IF-2025-01")
         with col2:
-            group_name = st.text_input("Nama Kelompok", placeholder="misal: Kelompok 3")
+            group_name = st.text_input("Nama / Nama Kelompok", placeholder="misal: Kelompok 3")
 
-        uploaded_file = st.file_uploader("Upload File Tugas", type=None)
+        uploaded_files = st.file_uploader(
+            "Upload File Tugas (boleh lebih dari satu)",
+            type=None,
+            accept_multiple_files=True,
+        )
         notes = st.text_area("Catatan (opsional)", placeholder="Tulis catatan untuk dosen...")
 
         submit_button = st.button("Kumpulkan Tugas", type="primary")
@@ -139,26 +149,29 @@ def main():
                 st.error("Nama kelas tidak boleh kosong.")
             elif not group_name.strip():
                 st.error("Nama kelompok tidak boleh kosong.")
-            elif uploaded_file is None:
-                st.error("Silakan upload file tugas terlebih dahulu.")
+            elif not uploaded_files:
+                st.error("Silakan upload minimal satu file tugas terlebih dahulu.")
             else:
-                # Simpan file
-                file_path, original_name, file_size = save_uploaded_file(
-                    uploaded_file, class_name, group_name
-                )
-                # Simpan ke database
-                add_submission(
-                    class_name.strip(),
-                    group_name.strip(),
-                    notes.strip(),
-                    file_path,
-                    original_name,
-                    file_size,
-                )
-                st.success("✅ Tugas berhasil dikumpulkan!")
+                saved_files_info = []
+                for uf in uploaded_files:
+                    file_path, original_name, file_size = save_uploaded_file(
+                        uf, class_name, group_name
+                    )
+                    add_submission(
+                        class_name.strip(),
+                        group_name.strip(),
+                        notes.strip(),
+                        file_path,
+                        original_name,
+                        file_size,
+                    )
+                    saved_files_info.append(original_name)
+
+                st.success(f"✅ {len(saved_files_info)} file tugas berhasil dikumpulkan!")
                 st.info(
                     f"Kelas: **{class_name}** | Kelompok: **{group_name}**\n\n"
-                    f"File: **{original_name}**"
+                    "File yang dikumpulkan:\n"
+                    + "\n".join([f"- **{name}**" for name in saved_files_info])
                 )
 
     # -------------------------
