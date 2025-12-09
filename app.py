@@ -16,6 +16,9 @@ st.set_page_config(
 DB_PATH = "submissions.db"
 UPLOAD_DIR = "uploads"
 
+# Password admin (lebih baik di-set via ENV: ADMIN_PASSWORD)
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+
 # =========================
 # DB UTILS
 # =========================
@@ -105,6 +108,10 @@ def save_uploaded_file(uploaded_file, class_name, group_name):
 def main():
     init_db()
 
+    # state untuk admin login
+    if "is_admin" not in st.session_state:
+        st.session_state["is_admin"] = False
+
     st.title("📥 Pengumpulan Tugas Kelompok")
 
     tab_submit, tab_admin = st.tabs(["🧑‍🎓 Pengumpulan Tugas", "🧑‍💼 Admin Panel"])
@@ -155,11 +162,35 @@ def main():
                 )
 
     # -------------------------
-    # TAB: ADMIN PANEL
+    # TAB: ADMIN PANEL (dengan login)
     # -------------------------
     with tab_admin:
         st.subheader("Admin Panel - Rekap Pengumpulan Tugas")
 
+        # Jika belum login, tampilkan form login dulu
+        if not st.session_state["is_admin"]:
+            st.warning("Area ini hanya untuk admin. Silakan login terlebih dahulu.")
+            password_input = st.text_input("Password Admin", type="password")
+            login_button = st.button("Login Admin")
+
+            if login_button:
+                if password_input == ADMIN_PASSWORD:
+                    st.session_state["is_admin"] = True
+                    st.success("Login berhasil. Selamat datang, Admin!")
+                else:
+                    st.error("Password salah.")
+
+            # stop di sini kalau belum login
+            if not st.session_state["is_admin"]:
+                return
+
+        # Tombol logout
+        st.sidebar.markdown("---")
+        if st.sidebar.button("🔒 Logout Admin"):
+            st.session_state["is_admin"] = False
+            st.sidebar.success("Anda sudah logout sebagai admin.")
+
+        # --- Konten admin di bawah ini hanya muncul jika sudah login ---
         df = get_all_submissions()
         if df.empty:
             st.warning("Belum ada tugas yang dikumpulkan.")
