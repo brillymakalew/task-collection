@@ -1,4 +1,6 @@
 import os
+import io
+import zipfile
 import sqlite3
 from datetime import datetime
 
@@ -22,9 +24,15 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 # =========================
 # DB UTILS
 # =========================
+def get_conn():
+    return sqlite3.connect(DB_PATH)
+
+
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     c = conn.cursor()
+
+    # Tabel submissions
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS submissions (
@@ -39,12 +47,24 @@ def init_db():
         )
         """
     )
+
+    # Tabel master kelas
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS classes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            class_name TEXT UNIQUE,
+            is_active INTEGER DEFAULT 1
+        )
+        """
+    )
+
     conn.commit()
     conn.close()
 
 
 def add_submission(class_name, group_name, notes, file_path, file_name, file_size):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     c = conn.cursor()
     c.execute(
         """
@@ -67,10 +87,62 @@ def add_submission(class_name, group_name, notes, file_path, file_name, file_siz
 
 
 def get_all_submissions():
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     df = pd.read_sql_query("SELECT * FROM submissions ORDER BY timestamp DESC", conn)
     conn.close()
     return df
+
+
+# ---------- MASTER KELAS ----------
+def get_active_classes():
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT class_name FROM classes WHERE is_active = 1 ORDER BY class_name ASC"
+    )
+    rows = c.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+
+def get_all_classes_df():
+    conn = get_conn()
+    df = pd.read_sql_query(
+        "SELECT id, class_name, is_active FROM classes ORDER BY class_name ASC", conn
+    )
+    conn.close()
+    return df
+
+
+def add_class_name(class_name: str) -> bool:
+    class_name = class_name.strip()
+    if not class_name:
+        return False
+
+    conn = get_conn()
+    c = conn.cursor()
+    try:
+        c.execute(
+            "INSERT OR IGNORE INTO classes (class_name, is_active) VALUES (?, 1)",
+            (class_name,),
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        conn.close()
+        return False
+
+
+def set_class_active(class_id: int, active: bool):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "UPDATE classes SET is_active = ? WHERE id = ?",
+        (1 if active else 0, class_id),
+    )
+    conn.commit()
+    conn.close()
 
 
 # =========================
@@ -102,6 +174,25 @@ def save_uploaded_file(uploaded_file, class_name, group_name):
     return file_path, uploaded_file.name, file_size
 
 
+def create_zip_from_df(df_filtered: pd.DataFrame) -> io.BytesIO:
+    """
+    Buat ZIP dari daftar file pada df_filtered.
+    Struktur di dalam ZIP: Kelas/Kelompok/NamaFileAsli
+    """
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for _, row in df_filtered.iterrows():
+            file_path = row["file_path"]
+            if file_path and os.path.exists(file_path):
+                class_name = sanitize_name(row["class_name"])
+                group_name = sanitize_name(row["group_name"])
+                file_name = row["file_name"] or os.path.basename(file_path)
+                arcname = os.path.join(class_name, group_name, file_name)
+                zf.write(file_path, arcname)
+    zip_buffer.seek(0)
+    return zip_buffer
+
+
 # =========================
 # MAIN APP
 # =========================
@@ -128,12 +219,27 @@ def main():
     with tab_submit:
         st.subheader("Form Pengumpulan Tugas")
 
+        # Ambil daftar kelas aktif
+        active_classes = get_active_classes()
+
         col1, col2 = st.columns(2)
 
         with col1:
-            class_name = st.text_input("Nama Kelas", placeholder="misal: IF-2025-01")
+            if active_classes:
+                class_name = st.selectbox(
+                    "Nama Kelas",
+                    active_classes,
+                    placeholder="Pilih kelas...",
+                )
+            else:
+                class_name = ""
+                st.error(
+                    "Belum ada master kelas yang aktif. "
+                    "Silakan hubungi dosen/admin untuk menambahkan kelas terlebih dahulu."
+                )
+
         with col2:
-            group_name = st.text_input("Nama / Nama Kelompok", placeholder="misal: Kelompok 3")
+            group_name = st.text_input("Nama", placeholder="misal: Kentaro")
 
         uploaded_files = st.file_uploader(
             "Upload File Tugas (boleh lebih dari satu)",
@@ -145,8 +251,13 @@ def main():
         submit_button = st.button("Kumpulkan Tugas", type="primary")
 
         if submit_button:
-            if not class_name.strip():
-                st.error("Nama kelas tidak boleh kosong.")
+            if not active_classes:
+                st.error(
+                    "Tidak bisa submit karena belum ada kelas aktif. "
+                    "Silakan hubungi admin."
+                )
+            elif not class_name:
+                st.error("Silakan pilih nama kelas.")
             elif not group_name.strip():
                 st.error("Nama kelompok tidak boleh kosong.")
             elif not uploaded_files:
@@ -178,7 +289,7 @@ def main():
     # TAB: ADMIN PANEL (dengan login)
     # -------------------------
     with tab_admin:
-        st.subheader("Admin Panel - Rekap Pengumpulan Tugas")
+        st.subheader("Admin Panel - Rekap & Master Data")
 
         # Jika belum login, tampilkan form login dulu
         if not st.session_state["is_admin"]:
@@ -203,7 +314,59 @@ def main():
             st.session_state["is_admin"] = False
             st.sidebar.success("Anda sudah logout sebagai admin.")
 
-        # --- Konten admin di bawah ini hanya muncul jika sudah login ---
+        # ---------- MASTER KELAS ----------
+        st.markdown("### ⚙️ Kelola Master Kelas")
+
+        with st.expander("Tambah & Kelola Kelas", expanded=True):
+            col_a, col_b = st.columns([3, 1])
+            with col_a:
+                new_class_name = st.text_input(
+                    "Tambah Kelas Baru",
+                    placeholder="misal: IF-2025-01",
+                    key="add_class_name",
+                )
+            with col_b:
+                if st.button("➕ Tambah Kelas"):
+                    if not new_class_name.strip():
+                        st.error("Nama kelas tidak boleh kosong.")
+                    else:
+                        ok = add_class_name(new_class_name)
+                        if ok:
+                            st.success(f'Kelas "{new_class_name}" berhasil ditambahkan / diaktifkan.')
+                        else:
+                            st.error("Gagal menambahkan kelas (mungkin sudah ada).")
+
+            # Daftar semua kelas
+            classes_df = get_all_classes_df()
+            if classes_df.empty:
+                st.info("Belum ada kelas di master data.")
+            else:
+                for _, row in classes_df.iterrows():
+                    c1, c2, c3 = st.columns([4, 2, 2])
+                    status_text = "Aktif ✅" if row["is_active"] == 1 else "Non-aktif ⚪"
+                    with c1:
+                        st.write(f"**{row['class_name']}**")
+                    with c2:
+                        st.write(status_text)
+                    with c3:
+                        if row["is_active"] == 1:
+                            if st.button(
+                                "Non-aktifkan",
+                                key=f"deact_{row['id']}",
+                            ):
+                                set_class_active(row["id"], False)
+                                st.rerun()
+                        else:
+                            if st.button(
+                                "Aktifkan",
+                                key=f"act_{row['id']}",
+                            ):
+                                set_class_active(row["id"], True)
+                                st.rerun()
+
+        st.markdown("---")
+
+        # ---------- DATA SUBMISSION ----------
         df = get_all_submissions()
         if df.empty:
             st.warning("Belum ada tugas yang dikumpulkan.")
@@ -259,6 +422,33 @@ def main():
         )
 
         st.dataframe(df_show, use_container_width=True)
+
+        # -------------------------
+        # BULK DOWNLOAD (ZIP)
+        # -------------------------
+        st.markdown("#### ⬇️ Bulk Download (ZIP)")
+
+        if df_filtered.empty:
+            st.info("Tidak ada data sesuai filter untuk di-download.")
+        else:
+            zip_buffer = create_zip_from_df(df_filtered)
+            timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+            if selected_class != "(Semua Kelas)":
+                base_name = f"tugas_{sanitize_name(selected_class)}"
+                if selected_group != "(Semua Kelompok)":
+                    base_name += f"_{sanitize_name(selected_group)}"
+            else:
+                base_name = "tugas_semua_kelas"
+
+            zip_file_name = f"{base_name}_{timestamp_str}.zip"
+
+            st.download_button(
+                label="📦 Download semua tugas sebagai ZIP (sesuai filter)",
+                data=zip_buffer,
+                file_name=zip_file_name,
+                mime="application/zip",
+            )
 
         st.markdown("#### Download Tugas per Baris")
         if df_filtered.empty:
