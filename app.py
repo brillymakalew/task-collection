@@ -239,7 +239,7 @@ def main():
                 )
 
         with col2:
-            group_name = st.text_input("Nama", placeholder="misal: Kentaro")
+            group_name = st.text_input("Nama Lengkap", placeholder="misal: Kentaro")
 
         uploaded_files = st.file_uploader(
             "Upload File Tugas (boleh lebih dari satu)",
